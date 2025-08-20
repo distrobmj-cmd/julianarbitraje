@@ -376,35 +376,56 @@ def formatear_mensaje_consulta_manual():
 
 💰 *TOP 5 PRECIOS MÁS BARATOS PARA COMPRAR:*"""
     
-    # Mostrar top 5 precios
-    for i, datos in enumerate(precios_detallados[:5], 1):
+    # SIEMPRE mostrar los 5 mejores precios disponibles
+    precios_a_mostrar = precios_detallados[:5]  # Tomar los primeros 5
+    
+    for i, datos in enumerate(precios_a_mostrar, 1):
         precio = datos['precio']
         descuento = ((trm_actual - precio) / trm_actual) * 100
         
-        # Emoji según el precio
+        # Emoji según el precio vs umbral
         if precio <= umbral:
             emoji_precio = "🟢"
-        elif precio <= trm_actual * 0.995:
+            estado_precio = "¡IDEAL!"
+        elif precio <= trm_actual * 0.995:  # -0.5%
             emoji_precio = "🟡"
+            estado_precio = "Muy bueno"
         elif precio <= trm_actual:
             emoji_precio = "🟠"
+            estado_precio = "Bueno"
         else:
             emoji_precio = "🔴"
+            estado_precio = "Caro"
         
         mensaje += f"""
-{emoji_precio} *#{i} - {precio:,.0f} COP* ({descuento:+.2f}%) 
+{emoji_precio} *#{i} - {precio:,.0f} COP* ({descuento:+.2f}%) - {estado_precio}
    🔹 {datos['vendedor']} vende USDT | 📊 {datos['completados']} órdenes | ✅ {datos['tasa']:.1f}%"""
     
-    # Resumen y recomendaciones
+    # Resumen y estadísticas
     mejor_descuento = ((trm_actual - mejor_precio) / trm_actual) * 100
     ahorro_100usd = (trm_actual - mejor_precio) * 100
+    peor_precio = precios_a_mostrar[-1]['precio']
+    diferencia_mejor_peor = peor_precio - mejor_precio
+    
+    # Contar cuántos están en cada categoría
+    ideales = sum(1 for p in precios_a_mostrar if p['precio'] <= umbral)
+    buenos = sum(1 for p in precios_a_mostrar if umbral < p['precio'] <= trm_actual * 0.995)
+    normales = sum(1 for p in precios_a_mostrar if trm_actual * 0.995 < p['precio'] <= trm_actual)
+    caros = sum(1 for p in precios_a_mostrar if p['precio'] > trm_actual)
     
     mensaje += f"""
-💡 *RESUMEN ACTUAL:*
-• Precio más barato: {mejor_precio:,.0f} COP
-• Mayor descuento: {mejor_descuento:+.2f}%
-• Diferencia vs objetivo (-2%): {mejor_precio - umbral:+.0f} COP
-• Ahorro por $100 USD: {ahorro_100usd:,.0f} COP
+
+💡 *RESUMEN DE LOS 5 MEJORES:*
+• Precio más barato: {mejor_precio:,.0f} COP ({mejor_descuento:+.2f}%)
+• Precio más caro (del top 5): {peor_precio:,.0f} COP
+• Diferencia entre mejor y peor: {diferencia_mejor_peor:,.0f} COP
+• Ahorro con el mejor vs TRM: {ahorro_100usd:,.0f} COP por $100 USD
+
+📊 *DISTRIBUCIÓN DE PRECIOS:*
+🟢 Ideales (≤ -2%): {ideales}/5
+🟡 Muy buenos (≤ -0.5%): {buenos}/5  
+🟠 Buenos (≤ TRM): {normales}/5
+🔴 Caros (> TRM): {caros}/5
 
 📊 *ANÁLISIS DE CERCANÍA AL OBJETIVO:*
 • 🟢 = Por debajo del umbral (-2%) ¡COMPRAR!
