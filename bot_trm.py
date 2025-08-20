@@ -13,13 +13,16 @@ CHAT_ID = os.getenv('CHAT_ID', '6620575663')
 PORCENTAJE_DESCUENTO = 0.02  # 2% de descuento
 INTERVALO_REVISION = 60  # segundos entre revisiones de precio
 INTERVALO_TRM = 3600  # actualizar TRM cada hora (3600 segundos)
+INTERVALO_ALERTA_PERIODICA = 1800  # 30 minutos = 1800 segundos
 
 # Variables globales
 trm_actual = None
 fecha_trm = None
 ultima_actualizacion_trm = 0
 ultimo_precio_alertado = None
+ultima_alerta_periodica = 0  # Nueva variable para alertas cada 30 min
 contador_alertas = 0
+contador_alertas_periodicas = 0  # Nuevo contador
 
 # Flask para mantener el servicio vivo en Render
 app = Flask(__name__)
@@ -32,13 +35,16 @@ def home():
     <ul>
         <li><strong>💰 TRM Oficial:</strong> {trm_actual:,.2f} COP ({fecha_trm if fecha_trm else 'Sin fecha'})</li>
         <li><strong>🎯 Umbral de Alerta:</strong> {(trm_actual * (1-PORCENTAJE_DESCUENTO)):,.2f} COP (-2%)</li>
-        <li><strong>🚨 Alertas Enviadas:</strong> {contador_alertas}</li>
+        <li><strong>🚨 Alertas Instantáneas:</strong> {contador_alertas}</li>
+        <li><strong>⏰ Alertas Periódicas:</strong> {contador_alertas_periodicas}</li>
         <li><strong>⏰ Última Actualización:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</li>
         <li><strong>🔄 Próxima Actualización TRM:</strong> {max(0, int((INTERVALO_TRM - (time.time() - ultima_actualizacion_trm)) / 60))} minutos</li>
+        <li><strong>📢 Próxima Alerta Periódica:</strong> {max(0, int((INTERVALO_ALERTA_PERIODICA - (time.time() - ultima_alerta_periodica)) / 60))} minutos</li>
     </ul>
     <h3>🔍 Monitoreo:</h3>
     <ul>
         <li>Revisando precios cada {INTERVALO_REVISION} segundos</li>
+        <li>Alertas periódicas cada {INTERVALO_ALERTA_PERIODICA//60} minutos</li>
         <li>Actualizando TRM cada {INTERVALO_TRM//60} minutos</li>
         <li>Fuente TRM: Banco de la República de Colombia</li>
     </ul>
@@ -51,9 +57,11 @@ def status():
         'trm_actual': trm_actual,
         'fecha_trm': fecha_trm,
         'umbral_alerta': trm_actual * (1-PORCENTAJE_DESCUENTO) if trm_actual else None,
-        'alertas_enviadas': contador_alertas,
+        'alertas_instantaneas': contador_alertas,
+        'alertas_periodicas': contador_alertas_periodicas,
         'ultima_revision': datetime.now().isoformat(),
-        'proxima_actualizacion_trm_minutos': max(0, int((INTERVALO_TRM - (time.time() - ultima_actualizacion_trm)) / 60))
+        'proxima_actualizacion_trm_minutos': max(0, int((INTERVALO_TRM - (time.time() - ultima_actualizacion_trm)) / 60)),
+        'proxima_alerta_periodica_minutos': max(0, int((INTERVALO_ALERTA_PERIODICA - (time.time() - ultima_alerta_periodica)) / 60))
     }
 
 def run_flask():
@@ -136,17 +144,17 @@ def obtener_trm_oficial():
     
     return False
 
-def obtener_precio_binance():
-    """Obtiene precio P2P Binance con información detallada"""
+def obtener_precios_binance_extendido():
+    """Obtiene más anuncios de Binance P2P para encontrar los mejores precios"""
     try:
         url = "https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search"
         data = {
             "asset": "USDT",
             "fiat": "COP",
             "tradeType": "BUY",
-            "payTypes": ["Bancolombia", "NequiPay"],  # Múltiples métodos
+            "payTypes": ["Bancolombia", "NequiPay", "DaviviendaPay"],  # Más métodos
             "page": 1,
-            "rows": 3,
+            "rows": 10,  # Aumentamos a 10 para mayor selección
             "publisherType": None
         }
         
@@ -156,36 +164,58 @@ def obtener_precio_binance():
             if result.get("data") and len(result["data"]) > 0:
                 anuncios = result["data"]
                 
-                mejor_precio = float(anuncios[0]["adv"]["price"])
-                vendedor = anuncios[0]["advertiser"]["nickName"]
-                completados = anuncios[0]["advertiser"]["monthOrderCount"]
-                tasa_completado = anuncios[0]["advertiser"]["monthFinishRate"]
-                
-                # Log de precios
-                precios_texto = "💰 Top 3 USDT: "
-                for i, anuncio in enumerate(anuncios[:3], 1):
+                # Procesar todos los anuncios
+                precios_detallados = []
+                for anuncio in anuncios:
                     precio = float(anuncio["adv"]["price"])
-                    precios_texto += f"{i}.{precio:,.0f} "
+                    vendedor = anuncio["advertiser"]["nickName"]
+                    completados = anuncio["advertiser"]["monthOrderCount"]
+                    tasa_completado = anuncio["advertiser"]["monthFinishRate"]
+                    
+                    precios_detallados.append({
+                        'precio': precio,
+                        'vendedor': vendedor,
+                        'completados': completados,
+                        'tasa': tasa_completado
+                    })
                 
-                log_mensaje(precios_texto)
+                # Ordenar por precio (más barato primero)
+                precios_detallados.sort(key=lambda x: x['precio'])
                 
-                return {
-                    'precio': mejor_precio,
-                    'vendedor': vendedor,
-                    'completados': completados,
-                    'tasa': tasa_completado,
-                    'precios_top3': [(float(a["adv"]["price"]), a["advertiser"]["nickName"]) for a in anuncios[:3]]
-                }
+                return precios_detallados
         
         log_mensaje("❌ No se pudo obtener datos de Binance")
         return None
         
     except Exception as e:
-        log_mensaje(f"❌ Error obteniendo precio Binance: {e}")
+        log_mensaje(f"❌ Error obteniendo precios Binance: {e}")
         return None
 
+def encontrar_precios_cercanos_umbral(precios_detallados, umbral):
+    """Encuentra los precios más cercanos al umbral del -2%"""
+    if not precios_detallados:
+        return []
+    
+    # Filtrar y ordenar por cercanía al umbral
+    precios_cercanos = []
+    for datos in precios_detallados:
+        precio = datos['precio']
+        distancia_umbral = abs(precio - umbral)
+        porcentaje_vs_trm = ((trm_actual - precio) / trm_actual) * 100
+        
+        precios_cercanos.append({
+            **datos,
+            'distancia_umbral': distancia_umbral,
+            'porcentaje_descuento': porcentaje_vs_trm
+        })
+    
+    # Ordenar por distancia al umbral (más cercanos primero)
+    precios_cercanos.sort(key=lambda x: x['distancia_umbral'])
+    
+    return precios_cercanos[:5]  # Top 5 más cercanos
+
 def debe_enviar_alerta(precio_actual):
-    """Determina si debe enviar alerta para evitar spam"""
+    """Determina si debe enviar alerta instantánea para evitar spam"""
     global ultimo_precio_alertado
     
     if ultimo_precio_alertado is None:
@@ -195,34 +225,74 @@ def debe_enviar_alerta(precio_actual):
     mejora = ultimo_precio_alertado - precio_actual
     return mejora >= 15
 
-def formatear_mensaje_alerta(datos_binance, trm, umbral):
-    """Formatea el mensaje de alerta con TRM oficial"""
+def formatear_mensaje_alerta_instantanea(datos_binance, trm, umbral):
+    """Formatea el mensaje de alerta instantánea"""
     precio = datos_binance['precio']
     descuento_real = ((trm - precio) / trm) * 100
     ahorro_100usd = (trm - precio) * 100
     
-    # Top 3 precios
-    top3_texto = ""
-    for i, (p, nick) in enumerate(datos_binance['precios_top3'], 1):
-        descuento_p = ((trm - p) / trm) * 100
-        emoji = "🥇" if i == 1 else "🥈" if i == 2 else "🥉"
-        top3_texto += f"{emoji} *{p:,.0f}* COP (-{descuento_p:.1f}%)\n"
-    
-    mensaje = f"""🚨 *¡OPORTUNIDAD USDT!* 🚨
+    mensaje = f"""🚨 *¡ALERTA INSTANTÁNEA USDT!* 🚨
 
-🏛️ *TRM OFICIAL BANREP:* {trm:,.2f} COP
-📅 *Fecha TRM:* {fecha_trm}
+🏛️ *TRM OFICIAL:* {trm:,.2f} COP
 🎯 *Umbral (-2%):* {umbral:,.0f} COP
+💰 *MEJOR PRECIO:* {precio:,.0f} COP
 
-{top3_texto}
-👤 *Vendedor top:* {datos_binance['vendedor']}
+📈 *Descuento real: -{descuento_real:.2f}%*
+💡 *Ahorro por $100 USD: {ahorro_100usd:,.0f} COP*
+
+👤 *Vendedor:* {datos_binance['vendedor']}
 📊 *{datos_binance['completados']} órdenes, {datos_binance['tasa']:.1f}% éxito*
 
-💡 *Ahorro por $100 USD: {ahorro_100usd:,.0f} COP*
-📈 *Descuento real: -{descuento_real:.2f}%*
 ⏰ {datetime.now().strftime('%H:%M:%S')}
+🔗 [Ir a Binance P2P](https://p2p.binance.com/es/trade/buy/USDT?fiat=COP)"""
+    
+    return mensaje
 
-🔗 [Ir a Binance P2P](https://p2p.binance.com/es/trade/buy/USDT?fiat=COP&payment=Bancolombia)"""
+def formatear_mensaje_alerta_periodica(precios_cercanos, trm, umbral):
+    """Formatea el mensaje de alerta periódica con precios cercanos al umbral"""
+    
+    mensaje = f"""📊 *REPORTE CADA 30 MIN - PRECIOS CERCANOS A -2%*
+
+🏛️ *TRM OFICIAL:* {trm:,.2f} COP ({fecha_trm})
+🎯 *Umbral objetivo (-2%):* {umbral:,.0f} COP
+
+🏆 *TOP PRECIOS MÁS CERCANOS:*
+"""
+    
+    for i, datos in enumerate(precios_cercanos, 1):
+        precio = datos['precio']
+        descuento = datos['porcentaje_descuento']
+        distancia = datos['distancia_umbral']
+        
+        # Emojis según cercanía
+        if precio <= umbral:
+            emoji = "🟢"  # Verde si está bajo el umbral
+            estado = "¡OPORTUNIDAD!"
+        elif distancia <= 20:
+            emoji = "🟡"  # Amarillo si está muy cerca
+            estado = "MUY CERCA"
+        else:
+            emoji = "🟠"  # Naranja si está cerca pero no tanto
+            estado = "CERCA"
+        
+        mensaje += f"""
+{emoji} *#{i} - {precio:,.0f} COP* ({estado})
+   📉 Descuento: {descuento:+.2f}%
+   📊 {datos['vendedor']} | {datos['completados']} órdenes
+"""
+    
+    # Estadísticas adicionales
+    mejor_precio = min(p['precio'] for p in precios_cercanos)
+    mejor_descuento = max(p['porcentaje_descuento'] for p in precios_cercanos)
+    
+    mensaje += f"""
+💡 *RESUMEN:*
+• Mejor precio: {mejor_precio:,.0f} COP
+• Mayor descuento: {mejor_descuento:+.2f}%
+• Ahorro por $100 USD: {(trm - mejor_precio) * 100:,.0f} COP
+
+⏰ *Próximo reporte:* 30 minutos
+🔗 [Ir a Binance P2P](https://p2p.binance.com/es/trade/buy/USDT?fiat=COP)"""
     
     return mensaje
 
@@ -237,6 +307,7 @@ def mostrar_resumen_trm():
 🎯 *Umbral alerta (-2%):* {umbral:,.0f} COP
 
 🔄 *Próxima actualización:* {INTERVALO_TRM//60} minutos
+📢 *Alertas periódicas cada:* {INTERVALO_ALERTA_PERIODICA//60} minutos
 🤖 *Bot monitoreando Binance P2P...*"""
         
         enviar_mensaje(mensaje_resumen)
@@ -244,13 +315,15 @@ def mostrar_resumen_trm():
 
 def bot_main():
     """Función principal del bot"""
-    global ultimo_precio_alertado, contador_alertas, ultima_actualizacion_trm
+    global ultimo_precio_alertado, contador_alertas, contador_alertas_periodicas
+    global ultima_actualizacion_trm, ultima_alerta_periodica
     
-    log_mensaje("🚀 Iniciando bot TRM automático en Render...")
+    log_mensaje("🚀 Iniciando bot TRM con alertas cada 30 minutos...")
     
     # Obtener TRM inicial
     if obtener_trm_oficial():
         ultima_actualizacion_trm = time.time()
+        ultima_alerta_periodica = time.time()  # Inicializar
         mostrar_resumen_trm()
     else:
         log_mensaje("❌ No se pudo obtener TRM inicial")
@@ -269,29 +342,39 @@ def bot_main():
                     ultima_actualizacion_trm = tiempo_actual
                     mostrar_resumen_trm()
             
-            # Obtener precio de Binance
-            datos_binance = obtener_precio_binance()
+            # Obtener precios de Binance
+            precios_detallados = obtener_precios_binance_extendido()
             
-            if datos_binance and trm_actual:
-                precio_actual = datos_binance['precio']
+            if precios_detallados and trm_actual:
                 umbral = trm_actual * (1 - PORCENTAJE_DESCUENTO)
+                mejor_precio = precios_detallados[0]['precio']
                 
                 # Mostrar comparación cada 10 revisiones
                 if contador_resumenes % 10 == 0:
-                    diferencia = ((precio_actual - trm_actual) / trm_actual) * 100
-                    estado = "🟢 BARATO" if precio_actual <= umbral else "🟡 NORMAL" if precio_actual < trm_actual else "🔴 CARO"
-                    log_mensaje(f"📊 TRM:{trm_actual:,.0f} | USDT:{precio_actual:,.0f} | {diferencia:+.1f}% {estado}")
+                    diferencia = ((mejor_precio - trm_actual) / trm_actual) * 100
+                    estado = "🟢 BARATO" if mejor_precio <= umbral else "🟡 NORMAL" if mejor_precio < trm_actual else "🔴 CARO"
+                    log_mensaje(f"📊 TRM:{trm_actual:,.0f} | MEJOR:{mejor_precio:,.0f} | {diferencia:+.1f}% {estado}")
                 
                 contador_resumenes += 1
                 
-                # Verificar alerta
-                if precio_actual <= umbral:
-                    if debe_enviar_alerta(precio_actual):
-                        mensaje_alerta = formatear_mensaje_alerta(datos_binance, trm_actual, umbral)
+                # ALERTA INSTANTÁNEA: Solo si el precio está muy por debajo del umbral
+                if mejor_precio <= umbral:
+                    if debe_enviar_alerta(mejor_precio):
+                        mensaje_alerta = formatear_mensaje_alerta_instantanea(precios_detallados[0], trm_actual, umbral)
                         if enviar_mensaje(mensaje_alerta):
-                            ultimo_precio_alertado = precio_actual
+                            ultimo_precio_alertado = mejor_precio
                             contador_alertas += 1
-                            log_mensaje(f"🚨 ALERTA #{contador_alertas} ENVIADA ✅")
+                            log_mensaje(f"🚨 ALERTA INSTANTÁNEA #{contador_alertas} ENVIADA ✅")
+                
+                # ALERTA PERIÓDICA: Cada 30 minutos con precios cercanos al umbral
+                if (tiempo_actual - ultima_alerta_periodica) >= INTERVALO_ALERTA_PERIODICA:
+                    precios_cercanos = encontrar_precios_cercanos_umbral(precios_detallados, umbral)
+                    if precios_cercanos:
+                        mensaje_periodico = formatear_mensaje_alerta_periodica(precios_cercanos, trm_actual, umbral)
+                        if enviar_mensaje(mensaje_periodico):
+                            contador_alertas_periodicas += 1
+                            ultima_alerta_periodica = tiempo_actual
+                            log_mensaje(f"📢 ALERTA PERIÓDICA #{contador_alertas_periodicas} ENVIADA ✅")
             else:
                 log_mensaje("⚠️ Error obteniendo datos")
             
@@ -303,7 +386,7 @@ def bot_main():
 
 def main():
     """Función principal que inicia Flask y el bot"""
-    log_mensaje("🌟 Bot TRM Automático para Render iniciando...")
+    log_mensaje("🌟 Bot TRM Automático con alertas periódicas iniciando...")
     
     # Iniciar Flask en un hilo separado
     flask_thread = threading.Thread(target=run_flask, daemon=True)
@@ -318,7 +401,7 @@ def main():
         bot_main()
     except KeyboardInterrupt:
         log_mensaje("🛑 Bot detenido manualmente")
-        enviar_mensaje(f"🛑 *Bot TRM Automático Detenido*\n📊 Total alertas: {contador_alertas}")
+        enviar_mensaje(f"🛑 *Bot TRM Automático Detenido*\n📊 Alertas instantáneas: {contador_alertas}\n📢 Alertas periódicas: {contador_alertas_periodicas}")
     except Exception as e:
         log_mensaje(f"❌ Error fatal: {e}")
         enviar_mensaje(f"❌ *Bot Error Fatal*\n{str(e)}")
