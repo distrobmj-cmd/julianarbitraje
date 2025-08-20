@@ -91,6 +91,23 @@ def enviar_mensaje(mensaje):
         else:
             log_mensaje(f"❌ Error enviando mensaje: {response.status_code}")
             return False
+
+def mostrar_resumen_trm():
+    """Muestra resumen completo de la TRM"""
+    if trm_actual:
+        umbral = trm_actual * (1 - PORCENTAJE_DESCUENTO)
+        mensaje_resumen = f"""📊 *ACTUALIZACIÓN TRM AUTOMÁTICA*
+
+🏛️ *TRM Oficial Banrep:* {trm_actual:,.2f} COP
+📅 *Fecha:* {fecha_trm}
+🎯 *Umbral alerta (-2%):* {umbral:,.0f} COP
+
+🔄 *Próxima actualización:* {INTERVALO_TRM//60} minutos
+📢 *Alertas periódicas cada:* {INTERVALO_ALERTA_PERIODICA//60} minutos
+🤖 *Bot monitoreando Binance P2P...*"""
+        
+        enviar_mensaje(mensaje_resumen)
+        log_mensaje(f"📈 TRM mostrada: {trm_actual:,.2f} COP ({fecha_trm})")
     except Exception as e:
         log_mensaje(f"❌ Error enviando mensaje: {e}")
         return False
