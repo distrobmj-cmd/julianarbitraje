@@ -20,11 +20,10 @@ trm_actual = None
 fecha_trm = None
 ultima_actualizacion_trm = 0
 ultimo_precio_alertado = None
-ultima_alerta_periodica = 0  # Nueva variable para alertas cada 30 min
-ultimo_update_id = 0  # Para control de comandos
+ultima_alerta_periodica = 0
 contador_alertas = 0
-contador_alertas_periodicas = 0  # Nuevo contador
-inicio_bot = 0  # Tiempo de inicio del bot
+contador_alertas_periodicas = 0
+inicio_bot = 0
 
 # Flask para mantener el servicio vivo en Render
 app = Flask(__name__)
@@ -91,6 +90,9 @@ def enviar_mensaje(mensaje):
         else:
             log_mensaje(f"❌ Error enviando mensaje: {response.status_code}")
             return False
+    except Exception as e:
+        log_mensaje(f"❌ Error enviando mensaje: {e}")
+        return False
 
 def mostrar_resumen_trm():
     """Muestra resumen completo de la TRM"""
@@ -108,33 +110,6 @@ def mostrar_resumen_trm():
         
         enviar_mensaje(mensaje_resumen)
         log_mensaje(f"📈 TRM mostrada: {trm_actual:,.2f} COP ({fecha_trm})")
-    except Exception as e:
-        log_mensaje(f"❌ Error enviando mensaje: {e}")
-        return False
-
-def obtener_actualizaciones_telegram():
-    """Obtiene mensajes nuevos de Telegram"""
-    try:
-        url = f"https://api.telegram.org/bot{TOKEN}/getUpdates"
-        params = {"timeout": 1, "limit": 10}
-        response = requests.get(url, params=params, timeout=5)
-        
-        if response.status_code == 200:
-            data = response.json()
-            return data.get("result", [])
-        return []
-    except Exception as e:
-        log_mensaje(f"❌ Error obteniendo actualizaciones: {e}")
-        return []
-
-def marcar_mensaje_leido(update_id):
-    """Marca un mensaje como leído para no procesarlo de nuevo"""
-    try:
-        url = f"https://api.telegram.org/bot{TOKEN}/getUpdates"
-        params = {"offset": update_id + 1}
-        requests.get(url, params=params, timeout=5)
-    except Exception as e:
-        log_mensaje(f"❌ Error marcando mensaje como leído: {e}")
 
 def obtener_trm_oficial():
     """Obtiene la TRM oficial del Banco de la República con múltiples fuentes"""
@@ -195,9 +170,9 @@ def obtener_precios_binance_extendido():
             "asset": "USDT",
             "fiat": "COP",
             "tradeType": "BUY",
-            "payTypes": ["Bancolombia", "NequiPay", "DaviviendaPay"],  # Más métodos
+            "payTypes": ["Bancolombia", "NequiPay", "DaviviendaPay"],
             "page": 1,
-            "rows": 10,  # Aumentamos a 10 para mayor selección
+            "rows": 10,
             "publisherType": None
         }
         
@@ -309,13 +284,13 @@ def formatear_mensaje_alerta_periodica(precios_cercanos, trm, umbral):
         
         # Emojis según cercanía
         if precio <= umbral:
-            emoji = "🟢"  # Verde si está bajo el umbral
+            emoji = "🟢"
             estado = "¡OPORTUNIDAD!"
         elif distancia <= 20:
-            emoji = "🟡"  # Amarillo si está muy cerca
+            emoji = "🟡"
             estado = "MUY CERCA"
         else:
-            emoji = "🟠"  # Naranja si está cerca pero no tanto
+            emoji = "🟠"
             estado = "CERCA"
         
         mensaje += f"""
@@ -339,198 +314,10 @@ def formatear_mensaje_alerta_periodica(precios_cercanos, trm, umbral):
     
     return mensaje
 
-def formatear_mensaje_consulta_manual():
-    """Formatea mensaje para consulta manual de precios"""
-    if not trm_actual:
-        return "❌ TRM no disponible. Esperando actualización..."
-    
-    # Obtener precios actuales
-    precios_detallados = obtener_precios_binance_extendido()
-    if not precios_detallados:
-        return "❌ No se pudieron obtener precios de Binance P2P"
-    
-    umbral = trm_actual * (1 - PORCENTAJE_DESCUENTO)
-    mejor_precio = precios_detallados[0]['precio']
-    
-    # Estado general del mercado
-    if mejor_precio <= umbral:
-        estado_mercado = "🟢 ¡EXCELENTE MOMENTO!"
-        emoji_estado = "🚀"
-    elif mejor_precio <= trm_actual * 0.995:  # -0.5%
-        estado_mercado = "🟡 BUEN MOMENTO"
-        emoji_estado = "👍"
-    elif mejor_precio <= trm_actual:
-        estado_mercado = "🟠 MOMENTO NORMAL"
-        emoji_estado = "👌"
-    else:
-        estado_mercado = "🔴 ESPERAR MEJOR PRECIO"
-        emoji_estado = "⏳"
-    
-    mensaje = f"""📱 *CONSULTA MANUAL - PRECIOS PARA COMPRAR USDT* {emoji_estado}
-
-🏛️ *TRM Oficial:* {trm_actual:,.2f} COP
-📅 *Fecha TRM:* {fecha_trm}
-🎯 *Umbral objetivo (-2%):* {umbral:,.0f} COP
-
-{estado_mercado}
-
-💰 *TOP 5 PRECIOS MÁS BARATOS PARA COMPRAR:*"""
-    
-    # SIEMPRE mostrar los 5 mejores precios disponibles
-    precios_a_mostrar = precios_detallados[:5]  # Tomar los primeros 5
-    
-    for i, datos in enumerate(precios_a_mostrar, 1):
-        precio = datos['precio']
-        descuento = ((trm_actual - precio) / trm_actual) * 100
-        
-        # Emoji según el precio vs umbral
-        if precio <= umbral:
-            emoji_precio = "🟢"
-            estado_precio = "¡IDEAL!"
-        elif precio <= trm_actual * 0.995:  # -0.5%
-            emoji_precio = "🟡"
-            estado_precio = "Muy bueno"
-        elif precio <= trm_actual:
-            emoji_precio = "🟠"
-            estado_precio = "Bueno"
-        else:
-            emoji_precio = "🔴"
-            estado_precio = "Caro"
-        
-        mensaje += f"""
-{emoji_precio} *#{i} - {precio:,.0f} COP* ({descuento:+.2f}%) - {estado_precio}
-   🔹 {datos['vendedor']} vende USDT | 📊 {datos['completados']} órdenes | ✅ {datos['tasa']:.1f}%"""
-    
-    # Resumen y estadísticas
-    mejor_descuento = ((trm_actual - mejor_precio) / trm_actual) * 100
-    ahorro_100usd = (trm_actual - mejor_precio) * 100
-    peor_precio = precios_a_mostrar[-1]['precio']
-    diferencia_mejor_peor = peor_precio - mejor_precio
-    
-    # Contar cuántos están en cada categoría
-    ideales = sum(1 for p in precios_a_mostrar if p['precio'] <= umbral)
-    buenos = sum(1 for p in precios_a_mostrar if umbral < p['precio'] <= trm_actual * 0.995)
-    normales = sum(1 for p in precios_a_mostrar if trm_actual * 0.995 < p['precio'] <= trm_actual)
-    caros = sum(1 for p in precios_a_mostrar if p['precio'] > trm_actual)
-    
-    mensaje += f"""
-
-💡 *RESUMEN DE LOS 5 MEJORES:*
-• Precio más barato: {mejor_precio:,.0f} COP ({mejor_descuento:+.2f}%)
-• Precio más caro (del top 5): {peor_precio:,.0f} COP
-• Diferencia entre mejor y peor: {diferencia_mejor_peor:,.0f} COP
-• Ahorro con el mejor vs TRM: {ahorro_100usd:,.0f} COP por $100 USD
-
-📊 *DISTRIBUCIÓN DE PRECIOS:*
-🟢 Ideales (≤ -2%): {ideales}/5
-🟡 Muy buenos (≤ -0.5%): {buenos}/5  
-🟠 Buenos (≤ TRM): {normales}/5
-🔴 Caros (> TRM): {caros}/5
-
-📊 *ANÁLISIS DE CERCANÍA AL OBJETIVO:*
-• 🟢 = Por debajo del umbral (-2%) ¡COMPRAR!
-• 🟡 = Muy cerca del objetivo (dentro de -0.5%)
-• 🟠 = Cerca pero no ideal  
-• 🔴 = Esperar mejor momento
-
-⏰ *Actualizado:* {datetime.now().strftime('%H:%M:%S')}
-🔗 [Ir a Binance P2P](https://p2p.binance.com/es/trade/buy/USDT?fiat=COP)
-
-💬 *Comandos disponibles:*
-• `/precios` - Ver precios para COMPRAR USDT
-• `/trm` - Ver TRM oficial
-• `/estado` - Estado del bot"""
-    
-    return mensaje
-
-def procesar_comandos(mensaje_texto, chat_id_origen):
-    """Procesa comandos del usuario"""
-    if chat_id_origen != CHAT_ID:
-        return False  # Solo responder al chat autorizado
-    
-    comando = mensaje_texto.lower().strip()
-    
-    if comando in ['/precios', '/precio', 'precios', 'precio']:
-        mensaje_respuesta = formatear_mensaje_consulta_manual()
-        enviar_mensaje(mensaje_respuesta)
-        log_mensaje("📱 Comando /precios ejecutado")
-        return True
-    
-    elif comando in ['/trm', 'trm']:
-        if trm_actual:
-            umbral = trm_actual * (1 - PORCENTAJE_DESCUENTO)
-            mensaje_trm = f"""🏛️ *TRM OFICIAL BANREP*
-
-💰 *Valor:* {trm_actual:,.2f} COP
-📅 *Fecha:* {fecha_trm}
-🎯 *Umbral (-2%):* {umbral:,.0f} COP
-⏰ *Consultado:* {datetime.now().strftime('%H:%M:%S')}"""
-            enviar_mensaje(mensaje_trm)
-        else:
-            enviar_mensaje("❌ TRM no disponible")
-        log_mensaje("📱 Comando /trm ejecutado")
-        return True
-    
-    elif comando in ['/estado', 'estado']:
-        tiempo_funcionando = time.time() - inicio_bot
-        horas = int(tiempo_funcionando // 3600)
-        minutos = int((tiempo_funcionando % 3600) // 60)
-        
-        mensaje_estado = f"""🤖 *ESTADO DEL BOT*
-
-✅ *Estado:* ACTIVO
-⏱️ *Funcionando:* {horas}h {minutos}m
-🚨 *Alertas instantáneas:* {contador_alertas}
-📢 *Alertas periódicas:* {contador_alertas_periodicas}
-📊 *Última TRM:* {trm_actual:,.2f} COP
-⏰ *Próxima alerta:* {max(0, int((INTERVALO_ALERTA_PERIODICA - (time.time() - ultima_alerta_periodica)) / 60))} min"""
-        
-        enviar_mensaje(mensaje_estado)
-        log_mensaje("📱 Comando /estado ejecutado")
-        return True
-    
-    elif comando in ['/help', '/ayuda', 'help', 'ayuda']:
-        mensaje_ayuda = f"""🤖 *BOT TRM ALERTS - AYUDA*
-
-📱 *Comandos disponibles:*
-
-🔹 `/precios` - Ver precios para COMPRAR USDT
-🔹 `/trm` - Ver TRM oficial
-🔹 `/estado` - Estado del bot
-🔹 `/help` - Esta ayuda
-
-🔄 *Funcionamiento automático:*
-• Alertas instantáneas cuando hay oportunidades
-• Reportes cada 30 minutos con mejores precios
-• Actualización TRM cada hora
-
-💡 *Objetivo:* Encontrar USDT con -2% descuento vs TRM oficial"""
-        
-        enviar_mensaje(mensaje_ayuda)
-        log_mensaje("📱 Comando /help ejecutado")
-        return True
-    
-    return False
-    """Muestra resumen completo de la TRM"""
-    if trm_actual:
-        umbral = trm_actual * (1 - PORCENTAJE_DESCUENTO)
-        mensaje_resumen = f"""📊 *ACTUALIZACIÓN TRM AUTOMÁTICA*
-
-🏛️ *TRM Oficial Banrep:* {trm_actual:,.2f} COP
-📅 *Fecha:* {fecha_trm}
-🎯 *Umbral alerta (-2%):* {umbral:,.0f} COP
-
-🔄 *Próxima actualización:* {INTERVALO_TRM//60} minutos
-📢 *Alertas periódicas cada:* {INTERVALO_ALERTA_PERIODICA//60} minutos
-🤖 *Bot monitoreando Binance P2P...*"""
-        
-        enviar_mensaje(mensaje_resumen)
-        log_mensaje(f"📈 TRM mostrada: {trm_actual:,.2f} COP ({fecha_trm})")
-
 def bot_main():
     """Función principal del bot"""
     global ultimo_precio_alertado, contador_alertas, contador_alertas_periodicas
-    global ultima_actualizacion_trm, ultima_alerta_periodica, ultimo_update_id, inicio_bot
+    global ultima_actualizacion_trm, ultima_alerta_periodica, inicio_bot
     
     log_mensaje("🚀 Iniciando bot TRM con alertas cada 30 minutos...")
     inicio_bot = time.time()
@@ -538,39 +325,17 @@ def bot_main():
     # Obtener TRM inicial
     if obtener_trm_oficial():
         ultima_actualizacion_trm = time.time()
-        ultima_alerta_periodica = time.time()  # Inicializar
+        ultima_alerta_periodica = time.time()
         mostrar_resumen_trm()
     else:
         log_mensaje("❌ No se pudo obtener TRM inicial")
         return
     
     contador_resumenes = 0
-    contador_comandos = 0
     
     while True:
         try:
             tiempo_actual = time.time()
-            
-            # Procesar comandos cada 5 revisiones para no sobrecargar
-            if contador_comandos % 5 == 0:
-                try:
-                    actualizaciones = obtener_actualizaciones_telegram()
-                    for update in actualizaciones:
-                        update_id = update.get("update_id", 0)
-                        
-                        if update_id > ultimo_update_id and "message" in update:
-                            mensaje = update["message"]
-                            texto = mensaje.get("text", "")
-                            chat_id_origen = str(mensaje.get("chat", {}).get("id", ""))
-                            
-                            if texto.strip():
-                                if procesar_comandos(texto, chat_id_origen):
-                                    ultimo_update_id = update_id
-                                    marcar_mensaje_leido(update_id)
-                except Exception as e:
-                    log_mensaje(f"❌ Error procesando comandos: {e}")
-            
-            contador_comandos += 1
             
             # Actualizar TRM cada hora
             if (tiempo_actual - ultima_actualizacion_trm) >= INTERVALO_TRM:
@@ -641,7 +406,6 @@ def main():
         enviar_mensaje(f"🛑 *Bot TRM Automático Detenido*\n📊 Alertas instantáneas: {contador_alertas}\n📢 Alertas periódicas: {contador_alertas_periodicas}")
     except Exception as e:
         log_mensaje(f"❌ Error fatal: {e}")
-        enviar_mensaje(f"❌ *Bot Error Fatal*\n{str(e)}")
 
 if __name__ == "__main__":
     main()
