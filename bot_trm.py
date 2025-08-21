@@ -31,7 +31,7 @@ app = Flask(__name__)
 @app.route('/')
 def home():
     return f"""
-    <h1>🤖 Bot TRM Alerts - ACTIVO ✅</h1>
+    <h1>🤖 Bot TRM Alerts - ACTIVO ✅ 0.1</h1>
     <h2>📊 Estado Actual:</h2>
     <ul>
         <li><strong>💰 TRM Oficial:</strong> {trm_actual:,.2f} COP ({fecha_trm if fecha_trm else 'Sin fecha'})</li>
@@ -409,4 +409,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
