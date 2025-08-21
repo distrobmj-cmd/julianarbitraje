@@ -10,7 +10,7 @@ TOKEN = os.getenv('TOKEN', '8369529426:AAEUR4HXafgMlOnyOyd_iA5MFQAydKRWciE')
 CHAT_ID = os.getenv('CHAT_ID', '6620575663')
 
 # Configuración del bot
-PORCENTAJE_DESCUENTO = 0.02  # 2% de descuento
+PORCENTAJE_DESCUENTO = 0.015  # 2% de descuento
 INTERVALO_REVISION = 60  # segundos entre revisiones de precio
 INTERVALO_TRM = 3600  # actualizar TRM cada hora (3600 segundos)
 INTERVALO_ALERTA_PERIODICA = 1800  # 30 minutos = 1800 segundos
@@ -409,3 +409,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
